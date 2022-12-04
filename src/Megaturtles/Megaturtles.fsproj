@@ -6,7 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Common.fs" />
+    <None Include="Scratch\Script1.fsx" />
     <Compile Include="Library.fs" />
   </ItemGroup>
+
+  <ItemGroup />
 
 </Project>
