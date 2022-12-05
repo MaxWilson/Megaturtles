@@ -1,10 +1,12 @@
 [<AutoOpen>]
 module Common
 
+let notImpl v = failwith $"Not implemented. Email Max if you want this feature. {v}"
 let thunk v _ = v
 let thunk1 f x _ = f x
 let thunk2 f x y = f x y
 let flip f x y = f y x
+
 module Tup2 =
     let create x y = x,y
     let createf f x y = (x,y) |> f
