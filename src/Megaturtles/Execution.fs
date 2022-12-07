@@ -57,25 +57,27 @@ let prettysPrint world =
         s.Append "\n" |> ignore
     for t in world.turtles.Values do
         let dir = match t.facing with North -> "^" | South -> "v" | East -> ">" | West -> "<"
-        s.AppendLine $"Turtle {t.id}: {dir}" |> ignore
+        let status = match t.status with Active -> " " | Dead -> "[DEAD] " | Victor -> "[VICTOR!] "
+        s.AppendLine $"Turtle {t.id}:{status} {dir}" |> ignore
     s.ToString()
-let forward1 world m n facing =
+let forward1 world (m,n) facing =
     match facing with
         | North -> m-1, n
         | South -> m+1, n
         | East -> m, n+1
         | West -> m, n-1
     |> fun (m, n) ->
-        let between min max n = min <= n && n <= max
+        let between inclusiveMin exclusiveMax n = inclusiveMin <= n && n < exclusiveMax
         if m |> between 0 world.grid.Length && n |> between 0 world.grid[m].Length then
             Some (m, n)
         else None
 let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress option * World =
+    let turtle = world.turtles[turtleId]
     match instruction with
+    | _ when turtle.status = Dead || turtle.status = Victor -> None, world // ignore further instructions after death or victory
     | Forward | Jump ->
-        let turtle = world.turtles[turtleId]
         let m,n = turtle.coords
-        match forward1 world m n turtle.facing with
+        match forward1 world (m,n) turtle.facing with
         | None ->
             // turtle exits the map and dies
             None, { world with
@@ -111,7 +113,6 @@ let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress
                             grid = world.grid |> Array2.replace m n None
                             }
     | Turn d ->
-        let turtle = world.turtles[turtleId]
         let facing' =
             let turn = match d with | (Left | Right) as f -> f | Random -> if rand.Next 2 = 0 then Left else Right
             match turtle.facing, turn with
@@ -121,7 +122,28 @@ let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress
             | East, Left | West, Right -> North
             | _ -> shouldntHappen()
         None, { world with turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with facing = facing' } | None -> None) }
-    | Shoot -> notImpl()
+    | Shoot ->
+        let rec findTarget coords =
+            match forward1 world coords turtle.facing with
+            | None -> world // didn't hit anything
+            | Some (m,n) ->
+                // see if missile hits a turtle or a wall
+                match world.grid[m][n] with
+                | Some (Turtle targetId) ->
+                    // kill the turtle and turn it into a crater
+                    { world with
+                                turtles = world.turtles |> Map.change targetId (function Some t -> Some { t with status = Dead } | _ -> None)
+                                grid = world.grid |> Array2.replace m n (Some Pit) // dead turtle body knocks down wall or fills in pit
+                                }
+                | Some Wall ->
+                    // turn wall into a crater
+                    { world with
+                                grid = world.grid |> Array2.replace m n (Some Pit) // dead turtle body knocks down wall or fills in pit
+                                }
+                | _ ->
+                    // else move missile forward and re-check
+                    findTarget (m,n)
+        None, (findTarget turtle.coords)
 
 
 let textToStart (txt: string) =
@@ -149,16 +171,31 @@ let interactive() =
 
     let print = prettysPrint >> printfn "%s"
     """
-    ###$##
-    # # ##
-    # # o#
-    #ooo #
-    #    #
-    #1  2#
-    ######
-    """
+###$##
+# # ##
+# # o#
+#ooo #
+#    #
+#1  2#
+######
+"""
     |> textToStart |> createWorld
     // note that a Jump instruction turns into Jump + Forward bytecode, where Jump is allowed to move into a Pit without dying but Forward is not. This also ensures
     // that it takes two tempo to Jump.
-    |> scriptExecute 1 [Forward; Jump; Forward; Forward; Forward; Turn Right; Shoot; Jump; Forward; Turn Left; Forward] |> scriptExecute 2 [Forward; Turn Left; Forward]
+    |> scriptExecute 1 [Forward; Jump; Forward; Forward; Turn Right; Shoot; Jump; Forward; Turn Left; Forward] |> scriptExecute 2 [Forward; Turn Left; Forward]
+    |> print
+
+    """
+###$##
+# # ##
+# # o#
+#ooo #
+#    #
+#1  2#
+######
+"""
+    |> textToStart |> createWorld
+    // note that a Jump instruction turns into Jump + Forward bytecode, where Jump is allowed to move into a Pit without dying but Forward is not. This also ensures
+    // that it takes two tempo to Jump.
+    |> scriptExecute 1 [Forward; Jump; Forward; Forward; Forward; Forward; Turn Right; ]
     |> print
