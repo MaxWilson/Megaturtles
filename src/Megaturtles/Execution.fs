@@ -59,44 +59,57 @@ let prettysPrint world =
         let dir = match t.facing with North -> "^" | South -> "v" | East -> ">" | West -> "<"
         s.AppendLine $"Turtle {t.id}: {dir}" |> ignore
     s.ToString()
+let forward1 world m n facing =
+    match facing with
+        | North -> m-1, n
+        | South -> m+1, n
+        | East -> m, n+1
+        | West -> m, n-1
+    |> fun (m, n) ->
+        let between min max n = min <= n && n <= max
+        if m |> between 0 world.grid.Length && n |> between 0 world.grid[m].Length then
+            Some (m, n)
+        else None
 let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress option * World =
     match instruction with
     | Forward | Jump ->
         let turtle = world.turtles[turtleId]
         let m,n = turtle.coords
-        let m',n' =
-            match turtle.facing with
-            | North -> m-1, n
-            | South -> m+1, n
-            | East -> m, n+1
-            | West -> m, n-1
-        let move() =
+        match forward1 world m n turtle.facing with
+        | None ->
+            // turtle exits the map and dies
             None, { world with
-                        turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n' } | _ -> None)
-                        grid = world.grid |> Array2.replace m n None |> Array2.replace m' n' (Some (Turtle turtleId))
-                        }
-        match world.grid[m'][n'] with
-        | None -> move()
-        | Some(Pit) when instruction = Jump -> move()
-        | Some (Wall | Pit) ->
-            // kill turtle
-            None, { world with
-                        turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Dead } | _ -> None)
-                        grid = world.grid |> Array2.replace m n None |> Array2.replace m' n' (Some (Turtle turtleId)) // dead turtle body knocks down wall or fills in pit
-                        }
-        | Some (Turtle otherId) ->
-            // kill both turtles but don't move--there's no room
-            None, { world with
-                        turtles = world.turtles
-                                    |> Map.change turtleId (function Some t -> Some { t with status = Dead } | _ -> None)
-                                    |> Map.change otherId (function Some t -> Some { t with status = Dead } | _ -> None)
-                        }
-        | Some Victory ->
-            // turtle exits the map victorious
-            None, { world with
-                        turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Victor } | _ -> None)
+                        turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with status = Dead} | _ -> None)
                         grid = world.grid |> Array2.replace m n None
                         }
+        | Some(m', n') ->
+            let move() =
+                None, { world with
+                            turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n' } | _ -> None)
+                            grid = world.grid |> Array2.replace m n None |> Array2.replace m' n' (Some (Turtle turtleId))
+                            }
+            match world.grid[m'][n'] with
+            | None -> move()
+            | Some(Pit) when instruction = Jump -> move()
+            | Some (Wall | Pit) ->
+                // kill turtle
+                None, { world with
+                            turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Dead } | _ -> None)
+                            grid = world.grid |> Array2.replace m n None |> Array2.replace m' n' (Some (Turtle turtleId)) // dead turtle body knocks down wall or fills in pit
+                            }
+            | Some (Turtle otherId) ->
+                // kill both turtles but don't move--there's no room
+                None, { world with
+                            turtles = world.turtles
+                                        |> Map.change turtleId (function Some t -> Some { t with status = Dead } | _ -> None)
+                                        |> Map.change otherId (function Some t -> Some { t with status = Dead } | _ -> None)
+                            }
+            | Some Victory ->
+                // turtle exits the map victorious
+                None, { world with
+                            turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Victor } | _ -> None)
+                            grid = world.grid |> Array2.replace m n None
+                            }
     | Turn d ->
         let turtle = world.turtles[turtleId]
         let facing' =
@@ -108,6 +121,7 @@ let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress
             | East, Left | West, Right -> North
             | _ -> shouldntHappen()
         None, { world with turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with facing = facing' } | None -> None) }
+    | Shoot -> notImpl()
 
 
 let textToStart (txt: string) =
@@ -121,7 +135,7 @@ let textToStart (txt: string) =
                 match c with
                 | '#' -> Wall |> Content |> Some
                 | 'o' -> Pit |> Content |> Some
-                | '$' -> Victory [] |> Content |> Some
+                | '$' -> Victory |> Content |> Some
                 | Number n -> StartPosition n |> Some
                 | _ -> None
             |]
