@@ -7,8 +7,8 @@
 
   <ItemGroup>
     <Compile Include="Common.fs" />
+    <Compile Include="Execution.fs" />
     <None Include="Scratch\Script1.fsx" />
-    <Compile Include="Library.fs" />
   </ItemGroup>
 
   <ItemGroup />
