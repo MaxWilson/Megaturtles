@@ -3,7 +3,7 @@ module Megaturtles.Execution
 
 exception Impossible of string
 type TurtleId = int
-type GridContent = Wall | Pit | Turtle of TurtleId | Victory
+type GridContent = Wall | Pit | Victory
 type GridSetupContent = StartPosition of TurtleId | Content of GridContent
 type Grid = GridContent option[][]
 type Coords = int * int
@@ -24,17 +24,19 @@ type InstructionAddress = int
 type Instruction =
     | Forward
     | Turn of TurnDirection
+    // note that a Jump command in the *language* turns into Jump + Forward instructions, where Jump is allowed to move into a Pit without dying but Forward is not. This also ensures
+    // that it takes two tempo to Jump.
     | Jump
     | Shoot
 let createGrid (start: GridSetupContent option[][]) =
-    (start |> Array.map (Array.map (function Some (StartPosition n) -> Turtle n |> Some | Some (Content c) -> Some c | _ -> None)))
+    (start |> Array.map (Array.map (function Some (Content c) -> Some c | _ -> None)))
 let createWorld start =
     let grid = createGrid start
     let turtles = [
-        for m, row in grid |> Array.mapi tup2 do
+        for m, row in start |> Array.mapi tup2 do
             for n, cell in row |> Array.mapi tup2 do
                 match cell with
-                | Some (Turtle id) ->
+                | Some (StartPosition id) ->
                     id, { coords = m,n; facing = North; id = id; status = Active }
                 | _ -> ()
         ]
@@ -42,23 +44,25 @@ let createWorld start =
         grid = grid
         turtles = turtles |> Map.ofList
         }
+let (|TurtleAt|_|) (m,n) world = (world.turtles.Values |> Seq.tryFind(fun t -> t.coords = (m,n)))
+
 let prettysPrint world =
     let grid = world.grid
     let s = new System.Text.StringBuilder()
-    for row in grid do
-        for cell in row do
-            match cell with
-            | Some Wall -> s.Append "#"
-            | Some Pit -> s.Append "o"
-            | Some (Turtle n) -> s.Append (n.ToString())
-            | Some (Victory _) -> s.Append "$"
-            | None -> s.Append "."
+    for m, row in grid |> Array.mapi tup2 do
+        for n, cell in row |> Array.mapi tup2 do
+            match cell, world with
+            | Some (Victory _), _ -> s.Append "$"
+            | _, TurtleAt (m,n)  turtle -> s.Append (turtle.id.ToString())
+            | Some Wall, _ -> s.Append "#"
+            | Some Pit, _ -> s.Append "o"
+            | None, _ -> s.Append "."
             |> ignore
         s.Append "\n" |> ignore
     for t in world.turtles.Values do
         let dir = match t.facing with North -> "^" | South -> "v" | East -> ">" | West -> "<"
         let status = match t.status with Active -> " " | Dead -> "[DEAD] " | Victor -> "[VICTOR!] "
-        s.AppendLine $"Turtle {t.id}:{status} {dir}" |> ignore
+        s.AppendLine $"Turtle {t.id}:{status} {dir} {t.coords}" |> ignore
     s.ToString()
 let forward1 world (m,n) facing =
     match facing with
@@ -88,30 +92,31 @@ let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress
             let move() =
                 None, { world with
                             turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n' } | _ -> None)
-                            grid = world.grid |> Array2.replace m n None |> Array2.replace m' n' (Some (Turtle turtleId))
                             }
-            match world.grid[m'][n'] with
-            | None -> move()
-            | Some(Pit) when instruction = Jump -> move()
-            | Some (Wall | Pit) ->
-                // kill turtle
-                None, { world with
-                            turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Dead } | _ -> None)
-                            grid = world.grid |> Array2.replace m n None |> Array2.replace m' n' (Some (Turtle turtleId)) // dead turtle body knocks down wall or fills in pit
-                            }
-            | Some (Turtle otherId) ->
+            match world with
+            | TurtleAt (m',n') otherTurtle when otherTurtle.status <> Victor ->
                 // kill both turtles but don't move--there's no room
                 None, { world with
                             turtles = world.turtles
                                         |> Map.change turtleId (function Some t -> Some { t with status = Dead } | _ -> None)
-                                        |> Map.change otherId (function Some t -> Some { t with status = Dead } | _ -> None)
+                                        |> Map.change otherTurtle.id (function Some t -> Some { t with status = Dead } | _ -> None)
                             }
-            | Some Victory ->
-                // turtle exits the map victorious
-                None, { world with
-                            turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Victor } | _ -> None)
-                            grid = world.grid |> Array2.replace m n None
-                            }
+            | _ ->
+                match world.grid[m'][n'] with
+                | None -> move()
+                | Some(Pit) when instruction = Jump -> move()
+                | Some (Wall | Pit) ->
+                    // kill turtle
+                    None, { world with
+                                turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Dead } | _ -> None)
+                                grid = world.grid |> Array2.replace m n None // dead turtle body knocks down wall or fills in pit
+                                }
+                | Some Victory ->
+                    // turtle exits the map victorious
+                    None, { world with
+                                turtles = world.turtles |> Map.change turtleId (function Some t -> Some { t with coords = m', n'; status = Victor } | _ -> None)
+                                grid = world.grid |> Array2.replace m n None
+                                }
     | Turn d ->
         let facing' =
             let turn = match d with | (Left | Right) as f -> f | Random -> if rand.Next 2 = 0 then Left else Right
@@ -128,14 +133,14 @@ let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress
             | None -> world // didn't hit anything
             | Some (m,n) ->
                 // see if missile hits a turtle or a wall
-                match world.grid[m][n] with
-                | Some (Turtle targetId) ->
-                    // kill the turtle and turn it into a crater
+                match world, world.grid[m][n] with
+                | TurtleAt (m,n) target, _ ->
+                    // kill the target turtle and turn its location into a crater
                     { world with
-                                turtles = world.turtles |> Map.change targetId (function Some t -> Some { t with status = Dead } | _ -> None)
+                                turtles = world.turtles |> Map.change target.id (function Some t -> Some { t with status = Dead } | _ -> None)
                                 grid = world.grid |> Array2.replace m n (Some Pit) // dead turtle body knocks down wall or fills in pit
                                 }
-                | Some Wall ->
+                | _, Some Wall ->
                     // turn wall into a crater
                     { world with
                                 grid = world.grid |> Array2.replace m n (Some Pit) // dead turtle body knocks down wall or fills in pit
@@ -163,13 +168,15 @@ let textToStart (txt: string) =
             |]
         )
 
+#if FABLE_COMPILER
+#else
 // .fsx support for Go To Definition is worse, so putting this test logic in the code for now to ease development.
+let scriptExecute n cmds world =
+    // in this simple scenario we aren't concerned with instructions for goto
+    cmds |> List.fold (fun world instruction -> execute(n, instruction) world |> snd) world
+
+let print = prettysPrint >> printfn "%s"
 let interactive() =
-    let scriptExecute n cmds world =
-        // in this simple scenario we aren't concerned with instructions for goto
-        cmds |> List.fold (fun world instruction -> execute(n, instruction) world |> snd) world
-
-    let print = prettysPrint >> printfn "%s"
     """
 ###$##
 # # ##
@@ -182,20 +189,6 @@ let interactive() =
     |> textToStart |> createWorld
     // note that a Jump instruction turns into Jump + Forward bytecode, where Jump is allowed to move into a Pit without dying but Forward is not. This also ensures
     // that it takes two tempo to Jump.
-    |> scriptExecute 1 [Forward; Jump; Forward; Forward; Turn Right; Shoot; Jump; Forward; Turn Left; Forward] |> scriptExecute 2 [Forward; Turn Left; Forward]
+    |> scriptExecute 1 [Forward; Jump; Forward; Forward; Turn Right; Shoot; Jump; Forward; Turn Left; Forward] |> scriptExecute 2 [Forward; Turn Left; Forward; Turn Right; Jump; Forward; Forward; Forward]
     |> print
-
-    """
-###$##
-# # ##
-# # o#
-#ooo #
-#    #
-#1  2#
-######
-"""
-    |> textToStart |> createWorld
-    // note that a Jump instruction turns into Jump + Forward bytecode, where Jump is allowed to move into a Pit without dying but Forward is not. This also ensures
-    // that it takes two tempo to Jump.
-    |> scriptExecute 1 [Forward; Jump; Forward; Forward; Forward; Forward; Turn Right; ]
-    |> print
+#endif
