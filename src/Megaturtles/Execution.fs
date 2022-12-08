@@ -152,7 +152,14 @@ let execute (turtleId:TurtleId, instruction) (world: World) : InstructionAddress
 
 
 let textToStart (txt: string) =
-    txt.Trim().Split("\n")
+    let rows = txt.Trim().Split("\n") |> Array.map String.trimLinefeeds
+    let n = (rows |> Array.map String.length |> Array.max)
+    rows
+    |> Array.map (fun line ->
+        if line.Length < n then
+            line + String.replicate (n - line.Length) " "
+        else line
+        )
     |> Array.map (fun line ->
         [|  for c in line do
                 let (|Number|_|) c =
